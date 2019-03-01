@@ -114,48 +114,78 @@ void cell_to_sc(xmlNode* cell, int x, int y) {
 			char cellname[10] = { '\0' };
 			get_cell_name(x, y, cellname);
 
-			int max_formula_len = strlen((char*)(at->children->content));
-			char formula_raw[max_formula_len + 1];
-			char formula_parsed[max_formula_len + 1];
-
-			strcpy(formula_raw, (char*)(at->children->content));
-			for (int i = 0; i < max_formula_len + 1; i++) formula_parsed[i] = '\0';
-
-			/* TODO this doesn't support the whole OpenFormula standard, though it might
-			 * never do.
-			 * But it'd be nice if it at least turned "SUM(...)" into "@SUM(...)"
+			/* formula_raw has + 4 offset since it starts with something like "of:="
+			 * as far as I've seen
+			 *
+			 * formula_parsed has + 200 size since it can be longer than the original 
+			 * formula, though usually it is not
 			 */
+			int formula_len = strlen((char*)(at->children->content));
+			char* formula_raw = (char*)(at->children->content + 4);
+			char formula_parsed[formula_len + 200];
 
-			// remove stuff that I don't like character by character
+			for (int i = 0; i < formula_len + 1; i++) formula_parsed[i] = '\0';
+
+			/* remove stuff that I don't like character by character
+			 *
+			 * copied_until points to the next character that hasn't been copied yet;
+			 * we don't copy character by character so we can add the '@' to function
+			 * names when we find out that we've been looping over one
+			 */
 			int formula_parsed_offset = 0;
-			for (char* current_pos = formula_raw + 4;
-				*current_pos != '\0'; current_pos++)
-			{
+			char* copied_until = formula_raw;
+			for (char* current_pos = formula_raw; *current_pos != '\0'; current_pos++) {
 				if (
-					// allowed characters
 					*current_pos == ' ' ||
-					*current_pos == '+' ||
-					*current_pos == '-' ||
-					*current_pos == '*' ||
-					*current_pos == '/' ||
-					*current_pos == '^' ||
-					*current_pos == '(' ||
-					*current_pos == ')' ||
+                    *current_pos == '+' ||
+                    *current_pos == '-' ||
+                    *current_pos == '*' ||
+                    *current_pos == '/' ||
+                    *current_pos == '^' ||
 					*current_pos == ':' ||
 					*current_pos == ';' ||
-					(
-						*current_pos >= 'a' && *current_pos <= 'z'
-					) ||
-					(
-						*current_pos >= 'A' && *current_pos <= 'Z'
-					) ||
+					*current_pos == ')' ||
+					*current_pos == '%' ||
 					(
 						*current_pos >= '0' && *current_pos <= '9'
 					)
 				)
 				{
-					formula_parsed[formula_parsed_offset] = *current_pos;
+					// copy over stuff so far; nothing out of the ordinary here
+					memcpy(formula_parsed + formula_parsed_offset, copied_until,
+						current_pos - copied_until + 1);
+					formula_parsed_offset += current_pos - copied_until + 1;
+					copied_until = current_pos + 1;
+				}
+				else if (
+					(
+						*current_pos >= 'a' && *current_pos <= 'z'
+					) ||
+					(
+						*current_pos >= 'A' && *current_pos <= 'Z'
+					)
+				)
+				{
+					// don't copy yet, we might be in the name of a function
+				}
+				else if (*current_pos == '(') {
+					/* if copied_until isn't right here, the name of a function is
+					 * between it and current_pos
+					 */
+
+					// copy an '@' to formula_parsed since thats how sc functions start
+					// TODO this is not enough; I'll need a real function translation
+					// table for this. but at least sum() -> @sum() works c:
+					formula_parsed[formula_parsed_offset] = '@';
 					formula_parsed_offset++;
+					memcpy(formula_parsed + formula_parsed_offset, copied_until,
+						current_pos - copied_until + 1);
+					formula_parsed_offset += current_pos - copied_until + 1;
+					copied_until = current_pos + 1;
+				}
+				else {
+					// we got some unwanted character here; just discard it
+					copied_until = current_pos + 1;
 				}
 			}
 
