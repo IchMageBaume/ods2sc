@@ -4,6 +4,34 @@ void walk_node(xmlNode* node, int level);
 void parse_table(xmlNode* node, int y);
 void cell_to_sc(xmlNode* cell, int x, int y);
 
+char* function_translations[] = {
+	/* Having the '@' and '(' here makes other code parts easier and faster
+	 */
+	// TODO you know what, I think we need a reusable FOSS OpenFormula parser
+	"sqrt", "@sqrt("
+	"ln", "@ln(",
+	"rounddown", "@floor(",
+	"roundup", "@ceil(",
+	"round", "@round("
+	"abs", "@abs(",
+	"power", "@pow(",
+	"pi", "@pi", // does this even work?
+	"radians", "@rtd(",
+	"degrees", "@dtr(",
+	"sin", "@sin(",
+	"cos", "@cos(",
+	"tan", "@tan(",
+	"asin", "@asin(",
+	"acos", "@acos(",
+	"atan", "@atan(",
+	"atan2", "@atan2(",
+
+
+
+	"sum", "@sum(",
+	NULL
+};
+
 /* Call libxml and pass control to recursive parser
  */
 int xml_to_sc(char* xml) {
@@ -90,6 +118,7 @@ void parse_table(xmlNode* node, int y) {
 
 /* Spit out .sc source for cell
  */
+// TODO gosh this is messy
 void cell_to_sc(xmlNode* cell, int x, int y) {
 	/* cells can have a formula and a precalculated value, so we loop through attributes,
 	 * set value_attr if we find a value and output the value if we get past the
@@ -123,8 +152,7 @@ void cell_to_sc(xmlNode* cell, int x, int y) {
 			int formula_len = strlen((char*)(at->children->content));
 			char* formula_raw = (char*)(at->children->content + 4);
 			char formula_parsed[formula_len + 200];
-
-			for (int i = 0; i < formula_len + 1; i++) formula_parsed[i] = '\0';
+			memset(formula_parsed, '\0', formula_len + 200);
 
 			/* remove stuff that I don't like character by character
 			 *
@@ -143,7 +171,6 @@ void cell_to_sc(xmlNode* cell, int x, int y) {
                     *current_pos == '/' ||
                     *current_pos == '^' ||
 					*current_pos == ':' ||
-					*current_pos == ';' ||
 					*current_pos == ')' ||
 					*current_pos == '%' ||
 					(
@@ -155,6 +182,11 @@ void cell_to_sc(xmlNode* cell, int x, int y) {
 					memcpy(formula_parsed + formula_parsed_offset, copied_until,
 						current_pos - copied_until + 1);
 					formula_parsed_offset += current_pos - copied_until + 1;
+					copied_until = current_pos + 1;
+				}
+				else if (*current_pos == ';') {
+					formula_parsed[formula_parsed_offset] = ',';
+					formula_parsed_offset++;
 					copied_until = current_pos + 1;
 				}
 				else if (
@@ -169,22 +201,54 @@ void cell_to_sc(xmlNode* cell, int x, int y) {
 					// don't copy yet, we might be in the name of a function
 				}
 				else if (*current_pos == '(') {
-					/* if copied_until isn't right here, the name of a function is
+					/* if copied_until isn't current_pos here, the name of a function is
 					 * between it and current_pos
 					 */
 
-					// copy an '@' to formula_parsed since thats how sc functions start
-					// TODO this is not enough; I'll need a real function translation
-					// table for this. but at least sum() -> @sum() works c:
-					formula_parsed[formula_parsed_offset] = '@';
-					formula_parsed_offset++;
-					memcpy(formula_parsed + formula_parsed_offset, copied_until,
-						current_pos - copied_until + 1);
-					formula_parsed_offset += current_pos - copied_until + 1;
-					copied_until = current_pos + 1;
+					char function_lowercase[current_pos - copied_until + 1];
+					function_lowercase[current_pos - copied_until] = '\0';
+					for (int i = 0; i < current_pos - copied_until; i++) {
+						char tmp = copied_until[i];
+
+						/* big ascii characters come before the small ones,
+						 * so this checks if tmp is big or small
+						 */
+						function_lowercase[i] = tmp <= 'Z'? tmp + ('a' - 'A') : tmp;
+					}
+
+					int found_translation = 0; // no double break, so we need this flag
+					for (int table_offset = 0;
+						function_translations[table_offset] != NULL; table_offset += 2)
+					{
+						if (! strcmp(function_translations[table_offset],
+							function_lowercase))
+						{
+							found_translation = 1;
+
+							strcat(formula_parsed + formula_parsed_offset,
+								function_translations[table_offset + 1]);
+							formula_parsed_offset +=
+								strlen(function_translations[table_offset + 1]);
+
+							break;
+						}
+					}
+
+					if (! found_translation) {
+						// just put an '@' in front and hope it works, lol
+						formula_parsed[formula_parsed_offset] = '@';
+						formula_parsed_offset++;
+						memcpy(formula_parsed + formula_parsed_offset, copied_until,
+							current_pos - copied_until + 1);
+						formula_parsed_offset += current_pos - copied_until + 1;
+						copied_until = current_pos + 1;
+					}
 				}
 				else {
-					// we got some unwanted character here; just discard it
+					/* we got some unwanted character here; just ignore it and set
+					 * copied_until since these unwanted characters shouldn't appear in
+					 * function names
+					 */
 					copied_until = current_pos + 1;
 				}
 			}
